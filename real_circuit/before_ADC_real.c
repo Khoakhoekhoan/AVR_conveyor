@@ -480,20 +480,27 @@ int main(void)
             wait_for_release();
         }
         
-        // Automated Target Capacity Cap Check Intercept
-        if (current_sum >= max_num && sys_rejected_state == 0) {
-            cli(); 
-            MOTOR_PORT &= ~((1 << IN1) | (1 << IN2));
-            set_dc_motor_speed(0); // Cut PWM line completely
-            clr_LCD();
-            move_LCD(1, 1);
-            putStr_LCD("TARGET REACHED!");
-            move_LCD(2, 1);
-            putStr_LCD("Batch Completed");
-            
-            while (checkpad() != 'A');
-            wait_for_release();
-            goto START_SETUP;
-        }
-    }
+if (sys_rejected_state == 0) {
+	// Automated Target Capacity Cap Check Intercept
+	if (current_sum >= max_num && max_num > 0) {
+		cli();
+		MOTOR_PORT &= ~((1 << IN1) | (1 << IN2));
+		set_dc_motor_speed(0); // Cut PWM line completely
+		clr_LCD();
+		move_LCD(1, 1);
+		putStr_LCD("TARGET REACHED!");
+		move_LCD(2, 1);
+		putStr_LCD("Batch Completed");
+		
+		while (checkpad() != 'A');
+		wait_for_release();
+		goto START_SETUP;
+	}
+	} else {
+// Fort reverse DC motor
+	MOTOR_PORT &= ~(1 << IN1);
+	MOTOR_PORT |= (1 << IN2);
+	set_dc_motor_speed(115);
+		}
+	}
 }
