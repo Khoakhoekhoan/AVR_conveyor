@@ -102,7 +102,7 @@ void wait_for_release() {
 // --- TIMER 0 OVERFLOW INTERRUPT SERVICE ROUTINE ---
 // Handles background sensor scanning and Software PWM for the PE3 Servo
 ISR(TIMER0_OVF_vect) {
-    TCNT0 = 55; // Tweak reload value to achieve exactly 200us per interrupt tick
+    TCNT0 = 210; // Tweak reload value to achieve exactly 200us per interrupt tick
     static uint8_t servo_tick_counter = 0;
     
     // --- Software PWM Generation for PE3 Servo (50Hz / 20ms Frame) ---
@@ -124,59 +124,83 @@ ISR(TIMER0_OVF_vect) {
 }
 
 // --- SUB-ROUTINE: EVALUATE SENSOR REGISTER TRANSITIONS ---
+// --- SUB-ROUTINE: EVALUATE SENSOR REGISTER TRANSITIONS WITH TIME WINDOW ---
 void process_ir_sensors(void) {
-    static uint8_t last_ir1 = 1, last_ir2 = 1, last_ir3 = 1, last_ircount = 1;
-    
-    uint8_t current_ir1 = (PINF & (1 << IR1_S)) ? 1 : 0;
-    uint8_t current_ir2 = (PINF & (1 << IR2_M)) ? 1 : 0;
-    uint8_t current_ir3 = (PINF & (1 << IR3_L)) ? 1 : 0;
-    uint8_t current_ircount = (PINF & (1 << IR_COUNT)) ? 1 : 0;
-    
-    // 1. Size S Detection Line
-    if (current_ir1 == 0 && last_ir1 == 1) {
-        if (size_S_flag == 1) {
-            detected_S_temp = 1;
-            servo_pulse_target = SERVO_POS_MINUS_90; // Actuate sorting flap to -90 deg
-        } else {
-            trigger_rejection_mode("UNWANTED SIZE S");
-            return;
-        }
-    }
-    
-    // 2. Size M Detection Line
-    if (current_ir2 == 0 && last_ir2 == 1) {
-        if (size_M_flag == 1) {
-            detected_M_temp = 1;
-            servo_pulse_target = SERVO_POS_0;        // Keep sorting flap at 0 deg
-        } else {
-            trigger_rejection_mode("UNWANTED SIZE M");
-            return;
-        }
-    }
-    
-    // 3. Size L Detection Line
-    if (current_ir3 == 0 && last_ir3 == 1) {
-        if (size_L_flag == 1) {
-            detected_L_temp = 1;
-            servo_pulse_target = SERVO_POS_PLUS_90;  // Actuate sorting flap to +90 deg
-        } else {
-            trigger_rejection_mode("UNWANTED SIZE L");
-            return;
-        }
-    }
-    
-    // 4. Global Counter Drop Sensor Line
-    if (current_ircount == 0 && last_ircount == 1) {
-        if (detected_S_temp)      { count_S++; current_sum++; detected_S_temp = 0; }
-        else if (detected_M_temp) { count_M++; current_sum++; detected_M_temp = 0; }
-        else if (detected_L_temp) { count_L++; current_sum++; detected_L_temp = 0; }
-        update_running_display();
-    }
-    
-    last_ir1 = current_ir1;
-    last_ir2 = current_ir2;
-    last_ir3 = current_ir3;
-    last_ircount = current_ircount;
+	static uint8_t scan_window_active = 0;
+	static uint16_t scan_timer = 0;
+	
+	// flag
+	static uint8_t caught_S = 0;
+	static uint8_t caught_M = 0;
+	static uint8_t caught_L = 0;
+	
+	static uint8_t last_ircount = 1;
+	
+	uint8_t current_ir1 = (PINF & (1 << IR1_S)) ? 1 : 0;
+	uint8_t current_ir2 = (PINF & (1 << IR2_M)) ? 1 : 0;
+	uint8_t current_ir3 = (PINF & (1 << IR3_L)) ? 1 : 0;
+	uint8_t current_ircount = (PINF & (1 << IR_COUNT)) ? 1 : 0;
+	
+	if (scan_window_active == 0) {
+		if (current_ir1 == 0 || current_ir2 == 0 || current_ir3 == 0) {
+			scan_window_active = 1;
+			scan_timer = 0;
+			caught_S = 0;
+			caught_M = 0;
+			caught_L = 0;
+		}
+	}
+	
+	if (scan_window_active == 1) {
+		if (current_ir1 == 0) caught_S = 1;
+		if (current_ir2 == 0) caught_M = 1;
+		if (current_ir3 == 0) caught_L = 1;
+		
+		scan_timer++;
+		
+		if (scan_timer > 2000) {
+			scan_window_active = 0; // close window
+			
+			// ---(L > M > S) ---
+			if (caught_L == 1) {
+				// SIZE L
+				if (size_L_flag == 1) {
+					detected_L_temp = 1;
+					servo_pulse_target = SERVO_POS_PLUS_90;
+					} else {
+					trigger_rejection_mode("UNWANTED SIZE L");
+				}
+			}
+			else if (caught_M == 1) {
+				//SIZE M
+				if (size_M_flag == 1) {
+					detected_M_temp = 1;
+					servo_pulse_target = SERVO_POS_0;
+					} else {
+					trigger_rejection_mode("UNWANTED SIZE M");
+				}
+			}
+			else if (caught_S == 1) {
+				//SIZE S
+				if (size_S_flag == 1) {
+					detected_S_temp = 1;
+					servo_pulse_target = SERVO_POS_MINUS_90;
+					} else {
+					trigger_rejection_mode("UNWANTED SIZE S");
+				}
+			}
+		}
+	}
+	
+	// 3. Global Counter Drop Sensor Line
+	if (current_ircount == 0 && last_ircount == 1) {
+		if (detected_S_temp)      { count_S++; current_sum++; detected_S_temp = 0; }
+		else if (detected_M_temp) { count_M++; current_sum++; detected_M_temp = 0; }
+		else if (detected_L_temp) { count_L++; current_sum++; detected_L_temp = 0; }
+		update_running_display();
+	}
+	
+	last_ircount = current_ircount;
 }
 
 // --- SUB-ROUTINE: DIRECT HARDWARE PWM DUTY REGISTER ---
@@ -186,24 +210,26 @@ void set_dc_motor_speed(uint8_t duty) {
 
 // --- SUB-ROUTINE: TRIGGER SLOW REVERSE REJECTION SYSTEM ---
 void trigger_rejection_mode(const char* error_msg) {
-    sys_rejected_state = 1; 
-    
-    // Force L298 H-Bridge to REVERSE Direction (IN1=0, IN2=1)
-    MOTOR_PORT &= ~(1 << IN1);
-    MOTOR_PORT |= (1 << IN2);
-    
-    // Throttle to SLOW PWM speed execution profiles directly via PE4 (approx 45% duty)
-    set_dc_motor_speed(115); 
-    
-    clr_LCD();
-    move_LCD(1, 1);
-    putStr_LCD("REJECT RUNNING");
-    move_LCD(2, 1);
-    putStr_LCD(error_msg);
-    
-    detected_S_temp = 0;
-    detected_M_temp = 0;
-    detected_L_temp = 0;
+sys_rejected_state = 1;
+
+// 1. Force L298 H-Bridge to REVERSE Direction (IN1=0, IN2=1)
+MOTOR_PORT &= ~(1 << IN1);
+MOTOR_PORT |= (1 << IN2);
+
+// 2. Kick maximum PWM duty (255) to provide enough torque to overcome forward inertia
+set_dc_motor_speed(255);
+_delay_ms(500);
+set_dc_motor_speed(200);
+
+clr_LCD();
+move_LCD(1, 1);
+putStr_LCD("REJECT RUNNING");
+move_LCD(2, 1);
+putStr_LCD(error_msg);
+
+detected_S_temp = 0;
+detected_M_temp = 0;
+detected_L_temp = 0;
 }
 
 // --- SUB-ROUTINE FOR STEP 1: MAX QUANTITY CONFIGURATION ---
@@ -402,13 +428,13 @@ int main(void)
     // --- TIMER 3 CONFIGURATION FOR HARDWARE FAST PWM ON PE4 (OC3B) ---
     // WGM33:0 = 0101 (Fast PWM, 8-bit), COM3B1:0 = 10 (Clear OC3B on Compare Match, Non-Inverting)
 	TCCR3A = (1 << COM3B1) | (1 << WGM30);
-	TCCR3B = (1 << WGM32) | (1 << CS31); // Prescaler = 1 (F_PWM = 1MHz / 256 = ~3.9kHz)
+	TCCR3B = (1 << WGM32) | (1 << CS31);
     OCR3BL = 0; // Initialize DC Motor speed at 0% duty
     
     // --- TIMER 0 ARCHITECTURE CONFIGURATION FOR SENSOR WORKLOAD & SERVO INTERRUPTS ---
 	TCCR0 = (1 << CS01) | (1 << CS00); // change prescaler from 8 to 64 (CS01=1, CS00=1)
 	TIMSK |= (1 << TOIE0);
-	TCNT0 = 233;         // (~256 - 55) * 8us = ~1.6ms loop window total
+	TCNT0 = 210;
     
     init_LCD();
     clr_LCD();
@@ -497,10 +523,10 @@ if (sys_rejected_state == 0) {
 		goto START_SETUP;
 	}
 	} else {
-// Fort reverse DC motor
-	MOTOR_PORT &= ~(1 << IN1);
-	MOTOR_PORT |= (1 << IN2);
-	set_dc_motor_speed(115);
+// Force reverse DC motor
+MOTOR_PORT &= ~(1 << IN1);
+MOTOR_PORT |= (1 << IN2);
+_delay_ms(50);
 		}
 	}
 }
