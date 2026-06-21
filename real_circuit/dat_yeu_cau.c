@@ -119,7 +119,7 @@ void wait_for_release() {
 // --- TIMER 0 OVERFLOW INTERRUPT SERVICE ROUTINE ---
 // Handles background sensor scanning and Software PWM for the PE3 Servo
 ISR(TIMER0_OVF_vect) {
-	TCNT0 = 233; // chu ki ngat chinh xac l‡ 200us
+	TCNT0 = 233; // chu ki ngat chinh xac l√† 200us
 	static uint8_t servo_tick_counter = 0;
 	static uint8_t sensor_tick_divider = 0; // <--- Them bien bo chia
 	
@@ -219,7 +219,7 @@ void process_ir_sensors(void) {
 	}
 	
 	else if (scan_state == 2) {
-		// Chi khi dien ap (> 500) m?i reset v? Tr?ng th·i 0
+		// Chi khi dien ap (> 500) moi reset ve trang thai 0
 		if (adc_val >= 500) {
 			scan_state = 0;
 		}
@@ -542,6 +542,7 @@ int main(void)
 if (sys_rejected_state == 0) {
 	// Automated Target Capacity Cap Check Intercept
 	if (current_sum >= max_num && max_num > 0) {
+		_delay_ms(1000);
 		cli();
 		MOTOR_PORT &= ~((1 << IN1) | (1 << IN2));
 		set_dc_motor_speed(0); // Cut PWM line completely
